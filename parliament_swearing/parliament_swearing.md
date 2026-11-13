@@ -1,4 +1,4 @@
-**Swearing in parliament**
+# **Swearing in parliament**
 
 Some MPs are allegedly swearing (and then not withdrawing the comments) to get kicked out of parliament for social media content
 
@@ -6,17 +6,17 @@ Separately, the attack on Helen Haines led to a discussion around vitriol direct
 
 So, how much do politicians swear, and has it increased? 
 
-Questions:
+### Questions:
 - Has swearing changed over time?
 - Who are the top offenders? Top 10 MPs by total number of words spoken and rate by party
 - What words are most/least common?
 - How many times are politicans quoting abuse directed towards them, versus those who are actually using swear words for their intended use?
 - How does the use of swear words by politicans compare to those commonly used in popular TV (most popular Australian tv shows, movies, podcasts) or music?
 
-Sources:
+### Sources:
 Speeches (to text) in the House of Representatives and the Senate, from Hansard via OpenAustralia. Roughly 700k speeches and 214m words
 
-Notes: 
+### Notes: 
 - Have used 26-word list of swear words pulled by Andy, as well as labels of severity - this includes words and their variants, eg. bastard, bastards
 - Have differed from Andy's analysis by taking word use (by count) instead of speeches containing a word
 - For standardisation, have created a measure per million words (to avoid discrepancies in sitting days per year distorting results)
@@ -29,6 +29,9 @@ import pandas as pd
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+import re
+import math
+from matplotlib.patches import Patch
 
 DB  = "/Users/hannah/Desktop/parliament-speeches.sqlite"
 OUT = Path("/Users/hannah/Desktop/parliament-csv")   
@@ -49,6 +52,7 @@ for f in sorted(OUT.glob("*.csv")):
 
     parliaments.csv 0.0 MB
     people.csv 0.1 MB
+    scan26.csv 0.6 MB
     speeches_meta.csv 259.2 MB
     swearing_hits.csv 1.4 MB
     swearing_terms.csv 0.0 MB
@@ -207,21 +211,16 @@ hits[["speech_date", "speaker_name", "term", "severity", "in_quote", "snippet"]]
 
 ```python
 # cleaning
-import re, sqlite3, pandas as pd
+terms = pd.read_sql("SELECT * FROM swearing_terms WHERE counted = 1", con)   
 
-DB  = "/Users/hannah/Desktop/parliament-speeches.sqlite"
-con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-
-terms = pd.read_sql("SELECT * FROM swearing_terms WHERE counted = 1", con)   # drops the 'Censored' row
-
-# every spelling variant -> its term, and each term -> its severity
+# every spelling variant, its term & each term, its severity
 var2term = {v.strip().lower(): r.term for _, r in terms.iterrows() for v in r.variants.split(",")}
 severity = dict(zip(terms.term, terms.severity))
 
-# phrases that look like swearing but aren't, e.g. "bloody-minded"
+# phrases that look like swearing but aren't, eg "bloody-minded"
 excl = {e.strip().lower() for x in terms.excluded.dropna() for e in x.split(",") if e.strip()}
 
-def alt(words):   # longest first, so "fuck off" is matched before "fuck"
+def alt(words):   
     return "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
 
 pat   = re.compile(r"(?<!\w)(?:" + alt(var2term) + r")(?!\w)", re.I)
@@ -236,7 +235,7 @@ for ch, gid, d, y, pid, name, party, text in cur:
     skip = [(m.start(), m.end()) for m in expat.finditer(text)]
     for m in matches:
         if any(s <= m.start() < e for s, e in skip):
-            continue                                    # inside an excluded phrase
+            continue                                    
         tok  = m.group(0).lower()
         term = var2term[tok]
         rows.append((ch, gid, d, y, pid, name, party, term, severity[term], tok, m.start()))
@@ -244,7 +243,7 @@ for ch, gid, d, y, pid, name, party, text in cur:
 scan = pd.DataFrame(rows, columns=["chamber", "gid", "date", "year", "person_id", "name",
                                    "party", "term", "severity", "token", "offset"])
 scan["speech"] = scan.chamber + "|" + scan.gid
-len(scan)   # 4489
+len(scan)   
 ```
 
 
@@ -254,7 +253,7 @@ len(scan)   # 4489
 
 
 
-**Has swearing changed over time? Top figures**
+### **Has swearing changed over time? Top figures**
 
 Swearing is up approximately 78% over the period of 2006-2026
 
@@ -616,52 +615,265 @@ pd.DataFrame({"all": all_counted, "headline": headline, "strong_up": strong_up})
 
 
 ```python
-words = speeches.groupby("speech_year")["word_count"].sum()
-
-# card 1: all 26 words together, per million words spoken
+# swearing by time
 total = scan.groupby("year").size().reindex(words.index, fill_value=0) / words * 1e6
 
-# card 2: the same, split by severity
+INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
+LINE = "#F58B27"                 
+FIT  = "#d4d3ce"                  
+PARTIAL_END = 2026 + 8 / 12       
+
+full = total.index < 2026
+slope, intercept = np.polyfit(total.index[full], total[full], 1)
+
+x = total.index.to_numpy(dtype=float)
+x[-1] = PARTIAL_END
+
+fig, ax = plt.subplots(figsize=(9, 5))
+for s in ["top", "right", "left"]:
+    ax.spines[s].set_visible(False)
+ax.spines["bottom"].set_color(MUTED)
+ax.grid(axis="y", color=GRID, lw=0.8)
+ax.set_axisbelow(True)
+ax.tick_params(axis="y", length=0, colors=MUTED)
+ax.set_xticks(range(2006, 2028))                                          
+ax.tick_params(axis="x", length=5, width=1, color=MUTED, labelcolor=MUTED, labelsize=8.5)
+
+ax.plot(x, total.values, color=LINE, lw=2, marker="o", ms=5, mew=0,        
+        clip_on=False, label="Swear words per million words")
+
+fx = np.array([2006, 2025])
+ax.plot(fx, slope * fx + intercept, color=FIT, lw=1.3, ls="--", clip_on=False,
+        label=f"Line of best fit, 2006\u20132025 (+{slope:.1f} per year)")
+
+ax.set_xlim(2006, 2027)                                                    
+ax.set_ylim(bottom=0)
+ax.margins(x=0)
+ax.set_ylabel("Per million words spoken", color=MUTED)
+ax.legend(frameon=False, loc="lower left", bbox_to_anchor=(0, 1.02), ncol=2,    
+          labelcolor=INK, borderaxespad=0, handlelength=2.2)
+ax.set_title("Swearing in parliament, 2006-2026", loc="left", color=INK, fontweight="bold", pad=36)
+plt.tight_layout(); plt.show()
+
+# data wrapper export
+DW_OUT = OUT / "datawrapper"
+DW_OUT.mkdir(parents=True, exist_ok=True)
+dw = pd.DataFrame({
+    "Year": total.index,
+    "Swear words per million words": total.round(2).values,
+    "Line of best fit (2006-2025)": [round(slope * y + intercept, 2) if y < 2026 else None for y in total.index],
+})
+dw.to_csv(DW_OUT / "swearing_in_parliament_per_million_words_2006-2026.csv", index=False)
+dw
+```
+
+
+    
+![png](output_9_0.png)
+    
+
+
+
+
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>Year</th>
+      <th>Swear words per million words</th>
+      <th>Line of best fit (2006-2025)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2006</td>
+      <td>16.23</td>
+      <td>15.39</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2007</td>
+      <td>14.85</td>
+      <td>15.96</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2008</td>
+      <td>12.81</td>
+      <td>16.54</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2009</td>
+      <td>12.20</td>
+      <td>17.11</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2010</td>
+      <td>23.98</td>
+      <td>17.68</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>2011</td>
+      <td>23.78</td>
+      <td>18.26</td>
+    </tr>
+    <tr>
+      <th>6</th>
+      <td>2012</td>
+      <td>13.46</td>
+      <td>18.83</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>2013</td>
+      <td>19.36</td>
+      <td>19.41</td>
+    </tr>
+    <tr>
+      <th>8</th>
+      <td>2014</td>
+      <td>20.34</td>
+      <td>19.98</td>
+    </tr>
+    <tr>
+      <th>9</th>
+      <td>2015</td>
+      <td>19.74</td>
+      <td>20.55</td>
+    </tr>
+    <tr>
+      <th>10</th>
+      <td>2016</td>
+      <td>24.88</td>
+      <td>21.13</td>
+    </tr>
+    <tr>
+      <th>11</th>
+      <td>2017</td>
+      <td>21.74</td>
+      <td>21.70</td>
+    </tr>
+    <tr>
+      <th>12</th>
+      <td>2018</td>
+      <td>21.09</td>
+      <td>22.27</td>
+    </tr>
+    <tr>
+      <th>13</th>
+      <td>2019</td>
+      <td>29.04</td>
+      <td>22.85</td>
+    </tr>
+    <tr>
+      <th>14</th>
+      <td>2020</td>
+      <td>20.03</td>
+      <td>23.42</td>
+    </tr>
+    <tr>
+      <th>15</th>
+      <td>2021</td>
+      <td>22.28</td>
+      <td>23.99</td>
+    </tr>
+    <tr>
+      <th>16</th>
+      <td>2022</td>
+      <td>29.13</td>
+      <td>24.57</td>
+    </tr>
+    <tr>
+      <th>17</th>
+      <td>2023</td>
+      <td>24.82</td>
+      <td>25.14</td>
+    </tr>
+    <tr>
+      <th>18</th>
+      <td>2024</td>
+      <td>22.29</td>
+      <td>25.71</td>
+    </tr>
+    <tr>
+      <th>19</th>
+      <td>2025</td>
+      <td>24.72</td>
+      <td>26.29</td>
+    </tr>
+    <tr>
+      <th>20</th>
+      <td>2026</td>
+      <td>36.65</td>
+      <td>NaN</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+
+
+
+```python
+# swearing severity
 by_sev = (scan.groupby(["year", "severity"]).size().unstack(fill_value=0)
               .reindex(words.index, fill_value=0)
               .reindex(columns=["mild", "strong", "extreme"], fill_value=0)
               .div(words, axis=0) * 1e6)
 
-BLUE, ORANGE, RED, INK, MUTED, GRID = "#2a78d6", "#eb6834", "#e34948", "#0b0b0b", "#52514e", "#e4e3df"
+INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
+COLOURS = {"mild": "#2a78d6", "strong": "#eb6834", "extreme": "#e34948"}
+PARTIAL_END = 2026 + 8 / 12       
 
-def style(ax):
-    for s in ["top", "right", "left"]:
-        ax.spines[s].set_visible(False)
-    ax.spines["bottom"].set_color(MUTED)
-    ax.grid(axis="y", color=GRID, lw=0.8)
-    ax.set_axisbelow(True)
-    ax.tick_params(length=0, colors=MUTED)
-    ax.set_xticks(range(2006, 2027, 2))
-```
+x = by_sev.index.to_numpy(dtype=float)
+x[-1] = PARTIAL_END
 
+fig, ax = plt.subplots(figsize=(9, 5))
+for s in ["top", "right", "left"]:
+    ax.spines[s].set_visible(False)
+ax.spines["bottom"].set_color(MUTED)
+ax.grid(axis="y", color=GRID, lw=0.8)
+ax.set_axisbelow(True)
+ax.tick_params(axis="y", length=0, colors=MUTED)
+ax.set_xticks(range(2006, 2028))
+ax.tick_params(axis="x", length=5, width=1, color=MUTED, labelcolor=MUTED, labelsize=8.5)
 
-```python
-# total swearing chart w/ line of best fit
-full = total.index < 2026
-slope, intercept = np.polyfit(total.index[full], total[full], 1)
+for severity, colour in COLOURS.items():
+    ax.plot(x, by_sev[severity], color=colour, lw=2, clip_on=False, label=severity.capitalize())
 
-fig, ax = plt.subplots(figsize=(9, 5)); style(ax)
-ax.plot(total.index[:-1], total.iloc[:-1], color=BLUE, lw=2, label="Swear words per million words")
-ax.plot(total.index[-2:], total.iloc[-2:], color=BLUE, lw=2, ls=(0, (3, 3)))          # 2026 dashed: partial year
-ax.scatter(total.index[:-1], total.iloc[:-1], s=25, color=BLUE, edgecolor="white", linewidth=1.5, zorder=3)
-ax.scatter([2026], [total.iloc[-1]], s=25, facecolor="white", edgecolor=BLUE, linewidth=1.5, zorder=3)
-
-x = np.array([2006, 2025])
-ax.plot(x, slope * x + intercept, color=MUTED, lw=1.5, ls="--",
-        label=f"Line of best fit, 2006–2025 (+{slope:.1f} per year)")
-ax.annotate("2026: Jan–Aug only", (2026, total.iloc[-1]), xytext=(-8, 6),
-            textcoords="offset points", ha="right", color=MUTED, fontsize=9)
-
-ax.legend(frameon=False, loc="upper left", labelcolor=INK)
-ax.set_ylabel("Per million words spoken", color=MUTED)
-ax.set_title("Swearing in parliament has risen since 2006", loc="left", color=INK, fontweight="bold")
+ax.set_xlim(2006, 2027)
 ax.set_ylim(bottom=0)
+ax.set_ylabel("Per million words spoken", color=MUTED)
+ax.legend(frameon=False, loc="lower left", bbox_to_anchor=(0, 1.02), ncol=3,
+          labelcolor=INK, borderaxespad=0, handlelength=2.2)
+ax.set_title("Use of swear words in parliament by severity, 2006-2026", loc="left", color=INK, fontweight="bold", pad=36)
 plt.tight_layout(); plt.show()
+
+# data wrapper export
+DW_OUT = OUT / "datawrapper"
+DW_OUT.mkdir(parents=True, exist_ok=True)
+dw = by_sev.round(2).rename(columns=str.capitalize).rename_axis("Year").reset_index()
+dw.to_csv(DW_OUT / "swearing_in_parliament_by_severity_per_million_words_2006-2026.csv", index=False)
+dw
 ```
 
 
@@ -671,30 +883,189 @@ plt.tight_layout(); plt.show()
 
 
 
+
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>severity</th>
+      <th>Year</th>
+      <th>Mild</th>
+      <th>Strong</th>
+      <th>Extreme</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2006</td>
+      <td>15.88</td>
+      <td>0.35</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2007</td>
+      <td>14.00</td>
+      <td>0.84</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2008</td>
+      <td>11.85</td>
+      <td>0.96</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2009</td>
+      <td>10.96</td>
+      <td>1.24</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2010</td>
+      <td>22.85</td>
+      <td>1.01</td>
+      <td>0.11</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>2011</td>
+      <td>21.93</td>
+      <td>1.85</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>6</th>
+      <td>2012</td>
+      <td>12.65</td>
+      <td>0.81</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>2013</td>
+      <td>18.88</td>
+      <td>0.48</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>8</th>
+      <td>2014</td>
+      <td>19.72</td>
+      <td>0.62</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>9</th>
+      <td>2015</td>
+      <td>18.26</td>
+      <td>1.48</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>10</th>
+      <td>2016</td>
+      <td>23.28</td>
+      <td>1.49</td>
+      <td>0.11</td>
+    </tr>
+    <tr>
+      <th>11</th>
+      <td>2017</td>
+      <td>20.38</td>
+      <td>1.27</td>
+      <td>0.08</td>
+    </tr>
+    <tr>
+      <th>12</th>
+      <td>2018</td>
+      <td>19.16</td>
+      <td>1.93</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>13</th>
+      <td>2019</td>
+      <td>27.43</td>
+      <td>1.61</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>14</th>
+      <td>2020</td>
+      <td>17.96</td>
+      <td>1.96</td>
+      <td>0.11</td>
+    </tr>
+    <tr>
+      <th>15</th>
+      <td>2021</td>
+      <td>19.92</td>
+      <td>2.36</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>16</th>
+      <td>2022</td>
+      <td>25.28</td>
+      <td>3.40</td>
+      <td>0.44</td>
+    </tr>
+    <tr>
+      <th>17</th>
+      <td>2023</td>
+      <td>22.81</td>
+      <td>1.43</td>
+      <td>0.59</td>
+    </tr>
+    <tr>
+      <th>18</th>
+      <td>2024</td>
+      <td>19.95</td>
+      <td>1.97</td>
+      <td>0.37</td>
+    </tr>
+    <tr>
+      <th>19</th>
+      <td>2025</td>
+      <td>20.97</td>
+      <td>3.60</td>
+      <td>0.16</td>
+    </tr>
+    <tr>
+      <th>20</th>
+      <td>2026</td>
+      <td>32.97</td>
+      <td>3.28</td>
+      <td>0.39</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+
+
+
 ```python
-fig, ax = plt.subplots(figsize=(9, 5)); style(ax)
-for col, c in [("mild", BLUE), ("strong", ORANGE), ("extreme", RED)]:
-    ax.plot(by_sev.index, by_sev[col], color=c, lw=2, label=col.capitalize())
-    ax.annotate(col.capitalize(), (2026, by_sev[col].iloc[-1]), xytext=(6, 0),
-                textcoords="offset points", va="center", color=INK, fontsize=9)
-
-ax.set_xlim(2005.5, 2027.3)
-ax.legend(frameon=False, loc="upper left", labelcolor=INK)
-ax.set_ylabel("Per million words spoken", color=MUTED)
-ax.set_title("Mild words dominate; strong and extreme remain rare", loc="left", color=INK, fontweight="bold")
-ax.set_ylim(bottom=0)
-plt.tight_layout(); plt.show()
-```
-
-
-    
-![png](output_11_0.png)
-    
-
-
-
-```python
-EARLY, LATE = (2006, 2009), (2022, 2025)      # four full years at each end
+EARLY, LATE = (2006, 2009), (2022, 2025)      
 
 def rate(hits, spk, a, b):
     """Swear words per million words spoken, over years a..b."""
@@ -731,29 +1102,211 @@ for name, (a, b) in [("early", EARLY), ("late", LATE)]:
 
 
 ```python
-# Senate analysis
-W = speeches.groupby(["speech_year", "chamber"]).word_count.sum().unstack()
-H = scan.groupby(["year", "chamber"]).size().unstack(fill_value=0).reindex(W.index, fill_value=0)
-by_chamber = H / W * 1e6
+# senate analysis
+words = speeches.groupby(["speech_year", "chamber"]).word_count.sum().unstack()
+uses = scan.groupby(["year", "chamber"]).size().unstack(fill_value=0).reindex(words.index, fill_value=0)
+by_chamber = uses / words * 1e6
+
+INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
+COLOURS = {"senate": ("Senate", "#eb6834"), "representatives": ("House of Representatives", "#2a78d6")}
+PARTIAL_END = 2026 + 8 / 12
+
+x = by_chamber.index.to_numpy(dtype=float)
+x[-1] = PARTIAL_END
 
 fig, ax = plt.subplots(figsize=(9, 5))
-for s in ["top", "right", "left"]: ax.spines[s].set_visible(False)
-ax.spines["bottom"].set_color(MUTED); ax.grid(axis="y", color=GRID, lw=0.8); ax.set_axisbelow(True)
-ax.tick_params(length=0, colors=MUTED); ax.set_xticks(range(2006, 2027, 2))
-for ch, c, label in [("senate", ORANGE, "Senate"), ("representatives", BLUE, "House of Representatives")]:
-    ax.plot(by_chamber.index, by_chamber[ch], color=c, lw=2)
-    ax.annotate(label, (2026, by_chamber[ch].iloc[-1]), xytext=(6, 0),
-                textcoords="offset points", va="center", color=INK, fontsize=9)
-ax.set_xlim(2005.5, 2029.5); ax.set_ylim(bottom=0)
+for s in ["top", "right", "left"]:
+    ax.spines[s].set_visible(False)
+ax.spines["bottom"].set_color(MUTED)
+ax.grid(axis="y", color=GRID, lw=0.8)
+ax.set_axisbelow(True)
+ax.tick_params(axis="y", length=0, colors=MUTED)
+ax.set_xticks(range(2006, 2028))
+ax.tick_params(axis="x", length=5, width=1, color=MUTED, labelcolor=MUTED, labelsize=8.5)
+
+for chamber, (label, colour) in COLOURS.items():
+    ax.plot(x, by_chamber[chamber], color=colour, lw=2, clip_on=False, label=label)
+
+ax.set_xlim(2006, 2027)
+ax.set_ylim(bottom=0)
 ax.set_ylabel("Per million words spoken", color=MUTED)
-ax.set_title("Senate vs House of Representatives", loc="left", color=INK, fontweight="bold")
+ax.legend(frameon=False, loc="lower left", bbox_to_anchor=(0, 1.02), ncol=2,
+          labelcolor=INK, borderaxespad=0, handlelength=2.2)
+ax.set_title("Use of swear words, Senate vs House of Representatives", loc="left", color=INK, fontweight="bold", pad=36)
 plt.tight_layout(); plt.show()
+
+DW_OUT = OUT / "datawrapper"
+DW_OUT.mkdir(parents=True, exist_ok=True)
+dw = by_chamber[["senate", "representatives"]].round(2)
+dw.columns = ["Senate", "House of Representatives"]
+dw = dw.rename_axis("Year").reset_index()
+dw.to_csv(DW_OUT / "swearing_in_parliament_by_chamber_per_million_words_2006-2026.csv", index=False)
+dw
 ```
 
 
     
-![png](output_13_0.png)
+![png](output_12_0.png)
     
+
+
+
+
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>Year</th>
+      <th>Senate</th>
+      <th>House of Representatives</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2006</td>
+      <td>20.51</td>
+      <td>13.18</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2007</td>
+      <td>13.24</td>
+      <td>16.05</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2008</td>
+      <td>17.64</td>
+      <td>10.02</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2009</td>
+      <td>13.66</td>
+      <td>11.37</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2010</td>
+      <td>20.87</td>
+      <td>25.61</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>2011</td>
+      <td>21.06</td>
+      <td>25.39</td>
+    </tr>
+    <tr>
+      <th>6</th>
+      <td>2012</td>
+      <td>14.07</td>
+      <td>13.08</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>2013</td>
+      <td>21.07</td>
+      <td>18.37</td>
+    </tr>
+    <tr>
+      <th>8</th>
+      <td>2014</td>
+      <td>26.34</td>
+      <td>16.33</td>
+    </tr>
+    <tr>
+      <th>9</th>
+      <td>2015</td>
+      <td>26.75</td>
+      <td>15.32</td>
+    </tr>
+    <tr>
+      <th>10</th>
+      <td>2016</td>
+      <td>35.01</td>
+      <td>17.47</td>
+    </tr>
+    <tr>
+      <th>11</th>
+      <td>2017</td>
+      <td>30.64</td>
+      <td>15.55</td>
+    </tr>
+    <tr>
+      <th>12</th>
+      <td>2018</td>
+      <td>32.49</td>
+      <td>13.31</td>
+    </tr>
+    <tr>
+      <th>13</th>
+      <td>2019</td>
+      <td>43.50</td>
+      <td>17.44</td>
+    </tr>
+    <tr>
+      <th>14</th>
+      <td>2020</td>
+      <td>30.99</td>
+      <td>12.81</td>
+    </tr>
+    <tr>
+      <th>15</th>
+      <td>2021</td>
+      <td>37.19</td>
+      <td>13.34</td>
+    </tr>
+    <tr>
+      <th>16</th>
+      <td>2022</td>
+      <td>51.97</td>
+      <td>15.72</td>
+    </tr>
+    <tr>
+      <th>17</th>
+      <td>2023</td>
+      <td>48.50</td>
+      <td>8.03</td>
+    </tr>
+    <tr>
+      <th>18</th>
+      <td>2024</td>
+      <td>41.29</td>
+      <td>11.04</td>
+    </tr>
+    <tr>
+      <th>19</th>
+      <td>2025</td>
+      <td>41.79</td>
+      <td>14.01</td>
+    </tr>
+    <tr>
+      <th>20</th>
+      <td>2026</td>
+      <td>68.12</td>
+      <td>20.20</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
 
 
 
@@ -796,7 +1349,7 @@ for a, b in [(2006, 2009), (2022, 2025)]:
     Liberal Party                         70
 
 
-**Top swearing MPs and rate of swearing by party? Top figures**
+### **Top swearing MPs and rate of swearing by party? Top figures**
 
 Note: An MP must've spoken at least 250k words to exclude those who have spoken very little from skewing results
 
@@ -823,25 +1376,14 @@ The 250k word cutoff excludes some prime swearers, including Bill Heffernan (877
 
 ```python
 # IGNORE BUILD CELL
-import re, sqlite3
-import pandas as pd
-from pathlib import Path
+terms = pd.read_sql("SELECT * FROM swearing_terms WHERE counted = 1", con)   
 
-DB  = "/Users/hannah/Desktop/parliament-speeches.sqlite"
-OUT = Path("/Users/hannah/Desktop/parliament-csv")
-
-con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-
-terms = pd.read_sql("SELECT * FROM swearing_terms WHERE counted = 1", con)   # drops the 'Censored' row
-
-# every spelling variant -> its term, and each term -> its severity
 var2term = {v.strip().lower(): r.term for _, r in terms.iterrows() for v in r.variants.split(",")}
 severity = dict(zip(terms.term, terms.severity))
 
-# phrases that look like swearing but aren't, e.g. "bloody-minded"
 excl = {e.strip().lower() for x in terms.excluded.dropna() for e in x.split(",") if e.strip()}
 
-def alt(words):   # longest first, so "fuck off" is matched before "fuck"
+def alt(words):  
     return "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
 
 pat   = re.compile(r"(?<!\w)(?:" + alt(var2term) + r")(?!\w)", re.I)
@@ -856,7 +1398,7 @@ for ch, gid, d, y, pid, name, party, text in cur:
     skip = [(m.start(), m.end()) for m in expat.finditer(text)]
     for m in matches:
         if any(s <= m.start() < e for s, e in skip):
-            continue                                    # inside an excluded phrase
+            continue                                    
         tok  = m.group(0).lower()
         term = var2term[tok]
         rows.append((ch, gid, d, y, pid, name, party, term, severity[term], tok, m.start()))
@@ -864,7 +1406,7 @@ for ch, gid, d, y, pid, name, party, text in cur:
 scan = pd.DataFrame(rows, columns=["chamber", "gid", "date", "year", "person_id", "name",
                                    "party", "term", "severity", "token", "offset"])
 scan["speech"] = scan.chamber + "|" + scan.gid
-print(len(scan))                                        # expect 4489
+print(len(scan))                                        
 
 OUT.mkdir(exist_ok=True)
 scan.to_csv(OUT / "scan26.csv", index=False)
@@ -877,7 +1419,7 @@ print("saved:", OUT / "scan26.csv")
 
 
 ```python
-OUT = Path("/Users/hannah/Desktop/parliament-csv")      # folder holding your exported CSVs
+OUT = Path("/Users/hannah/Desktop/parliament-csv")      
 
 def clean_ids(s):
     """Make person_id a clean text ID: '10001', never 10001.0 or 10001."""
@@ -890,7 +1432,6 @@ scan     = pd.read_csv(OUT / "scan26.csv",        dtype={"gid": str, "person_id"
 for d in (speeches, people, scan):
     d["person_id"] = clean_ids(d["person_id"])
 
-# safety checks: stop here if anything is off
 print("scan:", scan.shape, "| speeches:", speeches.shape)
 assert len(scan) == 4489 and len(speeches) == 701890, "unexpected row counts"
 matched = scan.person_id.dropna().isin(set(people.person_id)).sum()
@@ -1112,94 +1653,94 @@ top10.round(1)
   </thead>
   <tbody>
     <tr>
-      <th>10001.0</th>
-      <td>Tony Abbott</td>
-      <td>Liberal Party</td>
-      <td>representatives</td>
-      <td>765301</td>
-      <td>0.0</td>
-      <td>0.0</td>
-    </tr>
-    <tr>
-      <th>10003.0</th>
-      <td>Eric Abetz</td>
-      <td>Liberal Party</td>
+      <th>10830</th>
+      <td>Jacqui Lambie</td>
+      <td>Jacqui Lambie Network</td>
       <td>senate</td>
-      <td>1259534</td>
-      <td>0.0</td>
-      <td>0.0</td>
+      <td>627664</td>
+      <td>255.0</td>
+      <td>406.3</td>
     </tr>
     <tr>
-      <th>10004.0</th>
-      <td>Dick Adams</td>
+      <th>10610</th>
+      <td>Glenn Sterle</td>
+      <td>Australian Labor Party</td>
+      <td>senate</td>
+      <td>645623</td>
+      <td>190.0</td>
+      <td>294.3</td>
+    </tr>
+    <tr>
+      <th>11010</th>
+      <td>David Shoebridge</td>
+      <td>Australian Greens</td>
+      <td>senate</td>
+      <td>462479</td>
+      <td>83.0</td>
+      <td>179.5</td>
+    </tr>
+    <tr>
+      <th>10280</th>
+      <td>Pauline Hanson</td>
+      <td>Pauline Hanson's One Nation Party</td>
+      <td>senate</td>
+      <td>649137</td>
+      <td>110.0</td>
+      <td>169.5</td>
+    </tr>
+    <tr>
+      <th>10901</th>
+      <td>Jordon Steele-John</td>
+      <td>Australian Greens</td>
+      <td>senate</td>
+      <td>410811</td>
+      <td>69.0</td>
+      <td>168.0</td>
+    </tr>
+    <tr>
+      <th>10912</th>
+      <td>Mehreen Faruqi</td>
+      <td>Australian Greens</td>
+      <td>senate</td>
+      <td>464361</td>
+      <td>64.0</td>
+      <td>137.8</td>
+    </tr>
+    <tr>
+      <th>10599</th>
+      <td>Warren Snowdon</td>
       <td>Australian Labor Party</td>
       <td>representatives</td>
-      <td>282877</td>
-      <td>0.0</td>
-      <td>0.0</td>
+      <td>712754</td>
+      <td>93.0</td>
+      <td>130.5</td>
     </tr>
     <tr>
-      <th>10007.0</th>
-      <td>Anthony Albanese</td>
-      <td>Australian Labor Party</td>
-      <td>representatives</td>
-      <td>2105287</td>
-      <td>0.0</td>
-      <td>0.0</td>
-    </tr>
-    <tr>
-      <th>10009.0</th>
-      <td>Lyn Allison</td>
-      <td>Australian Democrats</td>
+      <th>10711</th>
+      <td>Sarah Hanson-Young</td>
+      <td>Australian Greens</td>
       <td>senate</td>
-      <td>283873</td>
-      <td>0.0</td>
-      <td>0.0</td>
+      <td>843238</td>
+      <td>104.0</td>
+      <td>123.3</td>
     </tr>
     <tr>
-      <th>10014.0</th>
-      <td>Kevin Andrews</td>
-      <td>Liberal Party</td>
-      <td>representatives</td>
-      <td>392362</td>
-      <td>0.0</td>
-      <td>0.0</td>
-    </tr>
-    <tr>
-      <th>10026.0</th>
-      <td>Bob Baldwin</td>
-      <td>Liberal Party</td>
-      <td>representatives</td>
-      <td>603618</td>
-      <td>0.0</td>
-      <td>0.0</td>
-    </tr>
-    <tr>
-      <th>10027.0</th>
-      <td>Guy Barnett</td>
-      <td>Liberal Party</td>
+      <th>10780</th>
+      <td>Peter Whish-Wilson</td>
+      <td>Australian Greens</td>
       <td>senate</td>
-      <td>350266</td>
-      <td>0.0</td>
-      <td>0.0</td>
+      <td>996370</td>
+      <td>118.0</td>
+      <td>118.4</td>
     </tr>
     <tr>
-      <th>10029.0</th>
-      <td>Andrew Bartlett</td>
-      <td>Australian Democrats</td>
+      <th>10856</th>
+      <td>Malcolm Roberts</td>
+      <td>Pauline Hanson's One Nation Party</td>
       <td>senate</td>
-      <td>785966</td>
-      <td>0.0</td>
-      <td>0.0</td>
-    </tr>
-    <tr>
-      <th>10038.0</th>
-      <td>Cory Bernardi</td>
-      <td>Liberal Party</td>
-      <td>senate</td>
-      <td>654363</td>
-      <td>0.0</td>
-      <td>0.0</td>
+      <td>883842</td>
+      <td>104.0</td>
+      <td>117.7</td>
     </tr>
   </tbody>
 </table>
@@ -1340,71 +1881,65 @@ PARTY_COLOURS = {
     "Derryn Hinch's Justice Party":      "#7A3E9D",
     "Independent":                       "#8A8A85",
 }
-FALLBACK = "#8A8A85"          # any party not listed above
-def colour(party): return PARTY_COLOURS.get(party, FALLBACK)
+INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 
-# each person's most recent party: their last speech not made as Speaker/President etc.
+def colour(party):
+    return PARTY_COLOURS.get(party, "#8A8A85")
+
+def bar_chart(labels, values, bar_parties, title, legend_cols=None):
+    fig, ax = plt.subplots(figsize=(9.5, 5.5))
+    for side in ["top", "right", "bottom", "left"]:
+        ax.spines[side].set_visible(False)
+    ax.tick_params(length=0, colors=INK)
+    ax.set_axisbelow(True)
+    bars = ax.barh(labels[::-1], values[::-1], color=[colour(p) for p in bar_parties[::-1]], height=0.65)
+    for bar, value in zip(bars, values[::-1]):
+        ax.text(value + 3, bar.get_y() + bar.get_height() / 2, f"{value:.0f}", va="center", color=MUTED, fontsize=9)
+    pad = 12
+    if legend_cols:
+        shown = list(dict.fromkeys(bar_parties))
+        ax.legend(handles=[Patch(color=colour(p), label=p) for p in shown], frameon=False, loc="lower left",
+                  bbox_to_anchor=(0, 1.02), ncol=legend_cols, fontsize=8, labelcolor=INK, borderaxespad=0)
+        pad = 22 + 16 * math.ceil(len(shown) / legend_cols)
+    ax.set_title(title, loc="left", color=INK, fontweight="bold", pad=pad)
+    ax.set_xlabel("Per million words spoken", color=MUTED)
+    plt.tight_layout()
+    plt.show()
+
 PRESIDING = ["Speaker", "Deputy-Speaker", "President", "Deputy-President"]
 recent = (speeches[speeches.person_id.notna() & speeches.party.notna() & ~speeches.party.isin(PRESIDING)]
           .sort_values("speech_date").groupby("person_id").party.last().rename("recent_party"))
-top10 = top10.join(recent)
-print(top10[["speaker_name", "usual_party", "recent_party"]])   # check the assignments
+mps_top = top10.drop(columns="recent_party", errors="ignore").join(recent)
 
-INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
-panels = [(axes[0], top10.iloc[::-1], "speaker_name", "recent_party", "Top 10 MPs"),
-          (axes[1], parties.iloc[::-1], None, None, "Parties")]
-for ax, d, lab, pcol, title in panels:
-    for s in ["top", "right", "bottom"]:
-        ax.spines[s].set_visible(False)
-    ax.spines["left"].set_color(MUTED); ax.tick_params(length=0, colors=INK)
-    ax.xaxis.grid(True, color=GRID, lw=0.8); ax.set_axisbelow(True)
-    names  = d[lab] if lab else d.index
-    colors = [colour(p) for p in (d[pcol] if pcol else d.index)]
-    bars = ax.barh(names, d.per_million, color=colors, height=0.65)
-    for b, v in zip(bars, d.per_million):
-        ax.text(v + 3, b.get_y() + b.get_height() / 2, f"{v:.0f}", va="center", color=MUTED, fontsize=9)
-    ax.set_title(title, loc="left", color=INK, fontweight="bold")
-    ax.set_xlabel("Per million words spoken", color=MUTED)
+bar_chart(list(mps_top.speaker_name), list(mps_top.per_million), list(mps_top.recent_party),
+          "Top 10 MPs, swear words per million words spoken", 2)
+bar_chart(list(parties.index), list(parties.per_million), list(parties.index),
+          "Swear words per million words spoken, by party")
 
-# legend for the MP panel, in rank order
-from matplotlib.patches import Patch
-used = list(dict.fromkeys(top10.sort_values("per_million", ascending=False).recent_party))
-axes[0].legend(handles=[Patch(color=colour(p), label=p) for p in used],
-               frameon=False, loc="lower right", fontsize=8, labelcolor=INK)
-plt.tight_layout(); plt.show()
+DW_OUT = OUT / "datawrapper"
+DW_OUT.mkdir(parents=True, exist_ok=True)
+
+(mps_top[["speaker_name", "recent_party", "per_million"]]
+    .rename(columns={"speaker_name": "MP", "recent_party": "Party", "per_million": "Swear words per million words"})
+    .round({"Swear words per million words": 1})
+    .to_csv(DW_OUT / "top_10_mps_swear_words_per_million_words.csv", index=False))
+
+(parties[["per_million"]]
+    .rename(columns={"per_million": "Swear words per million words"})
+    .round(1)
+    .rename_axis("Party")
+    .to_csv(DW_OUT / "swear_words_per_million_words_by_party.csv"))
 ```
 
-                     speaker_name                        usual_party  \
-    person_id                                                          
-    10830           Jacqui Lambie              Jacqui Lambie Network   
-    10610            Glenn Sterle             Australian Labor Party   
-    11010        David Shoebridge                  Australian Greens   
-    10280          Pauline Hanson  Pauline Hanson's One Nation Party   
-    10901      Jordon Steele-John                  Australian Greens   
-    10912          Mehreen Faruqi                  Australian Greens   
-    10599          Warren Snowdon             Australian Labor Party   
-    10711      Sarah Hanson-Young                  Australian Greens   
-    10780      Peter Whish-Wilson                  Australian Greens   
-    10856         Malcolm Roberts  Pauline Hanson's One Nation Party   
+
     
-                                    recent_party  
-    person_id                                     
-    10830                  Jacqui Lambie Network  
-    10610                 Australian Labor Party  
-    11010                      Australian Greens  
-    10280      Pauline Hanson's One Nation Party  
-    10901                      Australian Greens  
-    10912                      Australian Greens  
-    10599                 Australian Labor Party  
-    10711                      Australian Greens  
-    10780                      Australian Greens  
-    10856      Pauline Hanson's One Nation Party  
+![png](output_20_0.png)
+    
 
 
 
     
-![png](output_21_1.png)
+![png](output_20_1.png)
     
 
 
@@ -1428,7 +1963,7 @@ total_words = speeches.word_count.sum()
 scan["speech"] = scan.chamber + "|" + scan.gid
 
 freq = (scan.groupby("term").agg(uses=("speech", "size"), speeches=("speech", "nunique"))
-            .reindex(terms.term, fill_value=0))          # keeps terms with zero uses
+            .reindex(terms.term, fill_value=0))          
 freq["severity"]    = terms.set_index("term").severity
 freq["share_%"]     = freq.uses / freq.uses.sum() * 100
 freq["per_million"] = freq.uses / total_words * 1e6
@@ -1689,276 +2224,465 @@ freq.round(2)
 
 
 ```python
-from matplotlib.patches import Patch
-SEV = {"mild": "#f3a6a6", "strong": "#e34948", "extreme": "#7d1616"}
+# word popularity
+SEVERITY_COLOURS = {"mild": "#f3a6a6", "strong": "#e34948", "extreme": "#7d1616"}
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 
 d = freq.iloc[::-1]
 fig, ax = plt.subplots(figsize=(9, 8))
-for s in ["top", "right", "bottom"]:
-    ax.spines[s].set_visible(False)
-ax.spines["left"].set_color(MUTED); ax.tick_params(length=0, colors=INK)
-ax.xaxis.grid(True, color=GRID, lw=0.8); ax.set_axisbelow(True)
-bars = ax.barh(d.index, d.uses, color=[SEV[s] for s in d.severity], height=0.7)
-for b, v in zip(bars, d.uses):
-    ax.text(v + 15, b.get_y() + b.get_height() / 2, f"{v:,}", va="center", color=MUTED, fontsize=9)
-ax.legend(handles=[Patch(color=c, label=k.capitalize()) for k, c in SEV.items()],
-          frameon=False, loc="lower right", labelcolor=INK)
-ax.set_xlabel("Total uses, 2006 to Aug 2026", color=MUTED)
-ax.set_title("'Bloody' and 'damn' make up more than half of all swearing",
-             loc="left", color=INK, fontweight="bold")
+for side in ["top", "right", "bottom", "left"]:
+    ax.spines[side].set_visible(False)
+ax.tick_params(length=0, colors=INK)
+ax.set_axisbelow(True)
+
+bars = ax.barh(d.index, d.uses, color=[SEVERITY_COLOURS[s] for s in d.severity], height=0.7)
+for bar, value in zip(bars, d.uses):
+    ax.text(value + 15, bar.get_y() + bar.get_height() / 2, f"{value:,}", va="center", color=MUTED, fontsize=9)
+
+ax.legend(handles=[Patch(color=c, label=s.capitalize()) for s, c in SEVERITY_COLOURS.items()],
+          frameon=False, loc="lower left", bbox_to_anchor=(0, 1.02), ncol=3, labelcolor=INK, borderaxespad=0)
+ax.set_title("Most commonly used swear words", loc="left", color=INK, fontweight="bold", pad=52)
+ax.annotate("By severity, 2006-26", xy=(0, 1), xycoords="axes fraction", xytext=(0, 30),
+            textcoords="offset points", fontsize=10, color=MUTED, va="bottom")
+ax.set_xlabel("Total uses", color=MUTED)
 plt.tight_layout(); plt.show()
+
+DW_OUT = OUT / "datawrapper"
+DW_OUT.mkdir(parents=True, exist_ok=True)
+
+(freq[["severity", "uses"]]
+    .assign(severity=freq.severity.str.capitalize())
+    .rename(columns={"severity": "Severity", "uses": "Total uses"})
+    .rename_axis("Word")
+    .to_csv(DW_OUT / "most_common_swear_words_by_severity_2006-2026.csv"))
 ```
 
 
     
-![png](output_24_0.png)
+![png](output_23_0.png)
     
 
 
-**How often are politicans swearing for the purpose of swearing (ie. uses of the words that are intentionally reactionary rather than quoting abuse aimed at them, the party or somebody else)? Top lines**
+### **How often are politicans swearing for the purpose of swearing (ie. uses of the words that are intentionally reactionary rather than quoting abuse aimed at them, the party or somebody else)? Top lines**
 
-**NOTE: LLM ANALYSIS USED IN THIS INSTANCE**
+**NOTE: LLM ANALYSIS USED IN THIS INSTANCE. The 'own use' label underpinning analysis was a combined manual + LLM approach. I labelled a sample of 400 words using categories of use, and the LLM did the same. It matched my labels on 84.1% of instances, so shares are approximate. This approach can be refined further if necessary to achieve better accuracy so take this as a proof of concept**
 
+Per million words spoken, Parliament swears in its own voice approximately 12 times 
 
-```python
-%pip install anthropic
-```
+Over the last 20 years, swearing for the sake of it has nearly tripled, rising from 6.4 per million words in 2006-9 to 18.9 in 2022-5 - this is a rise of 197%
 
-    Collecting anthropic
-      Obtaining dependency information for anthropic from https://files.pythonhosted.org/packages/96/8e/f8ef271dcbe3b187879b660c129ee36ef655c7b878f6878460891d9b2a26/anthropic-2.8.0-py3-none-any.whl.metadata
-      Downloading anthropic-2.8.0-py3-none-any.whl.metadata (3.6 kB)
-    Collecting anyio<5,>=4.1.0 (from anthropic)
-      Obtaining dependency information for anyio<5,>=4.1.0 from https://files.pythonhosted.org/packages/a9/16/7757fb84c819accc7d7e9af5291b261e4abb8627ee040f99e7d35ef2457a/anyio-4.16.0-py3-none-any.whl.metadata
-      Downloading anyio-4.16.0-py3-none-any.whl.metadata (4.7 kB)
-    Collecting docstring-parser<1,>=0.15 (from anthropic)
-      Obtaining dependency information for docstring-parser<1,>=0.15 from https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl.metadata
-      Downloading docstring_parser-0.18.0-py3-none-any.whl.metadata (3.5 kB)
-    Collecting httpx2<3,>=2.0.0 (from anthropic)
-      Obtaining dependency information for httpx2<3,>=2.0.0 from https://files.pythonhosted.org/packages/7b/3d/2e4bc4fd1ef9770871669adb348d612a6e4786b303a23f9935b81c48dd60/httpx2-2.16.0-py3-none-any.whl.metadata
-      Downloading httpx2-2.16.0-py3-none-any.whl.metadata (10 kB)
-    Collecting jiter<1,>=0.4.0 (from anthropic)
-      Obtaining dependency information for jiter<1,>=0.4.0 from https://files.pythonhosted.org/packages/25/c5/3f98ccee535b6481fc401c594d23e07ca400d940ea8f9100a06262e07d66/jiter-0.19.0-cp311-cp311-macosx_10_12_x86_64.whl.metadata
-      Downloading jiter-0.19.0-cp311-cp311-macosx_10_12_x86_64.whl.metadata (5.2 kB)
-    Collecting opentelemetry-api<2,>=1.1.0 (from anthropic)
-      Obtaining dependency information for opentelemetry-api<2,>=1.1.0 from https://files.pythonhosted.org/packages/a9/2d/610db864d7513158cebb8f36cc88e67e73bd6c7aa1905ef18d89e1281c81/opentelemetry_api-1.45.2-py3-none-any.whl.metadata
-      Downloading opentelemetry_api-1.45.2-py3-none-any.whl.metadata (1.4 kB)
-    Requirement already satisfied: pydantic<3,>=1.10.0 in ./anaconda3/lib/python3.11/site-packages (from anthropic) (1.10.8)
-    Requirement already satisfied: sniffio<2,>=1 in ./anaconda3/lib/python3.11/site-packages (from anthropic) (1.3.1)
-    Collecting typing-extensions<5,>=4.14 (from anthropic)
-      Obtaining dependency information for typing-extensions<5,>=4.14 from https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl.metadata
-      Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
-    Requirement already satisfied: idna>=2.8 in ./anaconda3/lib/python3.11/site-packages (from anyio<5,>=4.1.0->anthropic) (3.4)
-    Collecting httpcore2==2.16.0 (from httpx2<3,>=2.0.0->anthropic)
-      Obtaining dependency information for httpcore2==2.16.0 from https://files.pythonhosted.org/packages/af/c2/ce417c397afa5181f0e3c6ff01a4d01639414e1adef08730d97571297151/httpcore2-2.16.0-py3-none-any.whl.metadata
-      Downloading httpcore2-2.16.0-py3-none-any.whl.metadata (27 kB)
-    Collecting idna>=2.8 (from anyio<5,>=4.1.0->anthropic)
-      Obtaining dependency information for idna>=2.8 from https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl.metadata
-      Downloading idna-3.20-py3-none-any.whl.metadata (7.2 kB)
-    Collecting truststore>=0.10 (from httpx2<3,>=2.0.0->anthropic)
-      Obtaining dependency information for truststore>=0.10 from https://files.pythonhosted.org/packages/51/e9/3a7820be2bb0fe53b6bc9c3be26d3d1158004e4c3ab953aa6840b955b1e9/truststore-0.10.5-py3-none-any.whl.metadata
-      Downloading truststore-0.10.5-py3-none-any.whl.metadata (4.5 kB)
-    Collecting h11>=0.16 (from httpcore2==2.16.0->httpx2<3,>=2.0.0->anthropic)
-      Obtaining dependency information for h11>=0.16 from https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl.metadata
-      Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
-    Downloading anthropic-2.8.0-py3-none-any.whl (2.5 MB)
-    [2K   [38;2;114;156;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [32m2.5/2.5 MB[0m [31m26.6 MB/s[0m eta [36m0:00:00[0m MB/s[0m eta [36m0:00:01[0m
-    [?25hDownloading anyio-4.16.0-py3-none-any.whl (134 kB)
-    [2K   [38;2;114;156;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [32m134.5/134.5 kB[0m [31m16.6 MB/s[0m eta [36m0:00:00[0m
-    [?25hDownloading docstring_parser-0.18.0-py3-none-any.whl (22 kB)
-    Downloading httpx2-2.16.0-py3-none-any.whl (97 kB)
-    [2K   [38;2;114;156;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [32m97.9/97.9 kB[0m [31m12.2 MB/s[0m eta [36m0:00:00[0m
-    [?25hDownloading httpcore2-2.16.0-py3-none-any.whl (85 kB)
-    [2K   [38;2;114;156;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [32m85.1/85.1 kB[0m [31m13.5 MB/s[0m eta [36m0:00:00[0m
-    [?25hDownloading jiter-0.19.0-cp311-cp311-macosx_10_12_x86_64.whl (289 kB)
-    [2K   [38;2;114;156;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [32m289.4/289.4 kB[0m [31m26.4 MB/s[0m eta [36m0:00:00[0m
-    [?25hDownloading opentelemetry_api-1.45.2-py3-none-any.whl (60 kB)
-    [2K   [38;2;114;156;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [32m60.3/60.3 kB[0m [31m8.6 MB/s[0m eta [36m0:00:00[0m
-    [?25hDownloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
-    [2K   [38;2;114;156;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [32m45.6/45.6 kB[0m [31m12.6 MB/s[0m eta [36m0:00:00[0m
-    [?25hDownloading idna-3.20-py3-none-any.whl (69 kB)
-    [2K   [38;2;114;156;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [32m69.6/69.6 kB[0m [31m12.4 MB/s[0m eta [36m0:00:00[0m
-    [?25hDownloading truststore-0.10.5-py3-none-any.whl (19 kB)
-    Downloading h11-0.16.0-py3-none-any.whl (37 kB)
-    Installing collected packages: typing-extensions, truststore, jiter, idna, h11, docstring-parser, opentelemetry-api, httpcore2, anyio, httpx2, anthropic
-      Attempting uninstall: typing-extensions
-        Found existing installation: typing_extensions 4.12.2
-        Uninstalling typing_extensions-4.12.2:
-          Successfully uninstalled typing_extensions-4.12.2
-      Attempting uninstall: idna
-        Found existing installation: idna 3.4
-        Uninstalling idna-3.4:
-          Successfully uninstalled idna-3.4
-      Attempting uninstall: h11
-        Found existing installation: h11 0.14.0
-        Uninstalling h11-0.14.0:
-          Successfully uninstalled h11-0.14.0
-      Attempting uninstall: anyio
-        Found existing installation: anyio 3.5.0
-        Uninstalling anyio-3.5.0:
-          Successfully uninstalled anyio-3.5.0
-    [31mERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
-    jupyter-server 1.23.4 requires anyio<4,>=3.1.0, but you have anyio 4.16.0 which is incompatible.[0m[31m
-    [0mSuccessfully installed anthropic-2.8.0 anyio-4.16.0 docstring-parser-0.18.0 h11-0.16.0 httpcore2-2.16.0 httpx2-2.16.0 idna-3.20 jiter-0.19.0 opentelemetry-api-1.45.2 truststore-0.10.5 typing-extensions-4.16.0
-    Note: you may need to restart the kernel to use updated packages.
+Own use in the senate rose 374% in this period - from 7.8 to 37.1 per million. By comparison, in the House it rose 36% (5.4 to 7.4)
 
+96% of these uses are mild words, with "damn" (36%) and "bloody" (33%) alone accounting for more than 2/3rds
+
+Since 2016 in the senate, the split by party is:
+1. One Nation - 116/mil words
+2. Greens - 74/mil words
+3. Nationals - 17/mil words
+4. Labor - 16/mil words
+5. Liberals - 6/mil words.
+
+One Nation therefore use swear words for the sake of it 7.4 times the rate of Labor.
+
+Of 'extreme' words like fuck and cunt, they're only used 22 times - 12 of which are quotes from somebody else, and 5 of which are quotes aimed at the speaker (online abuse read out)
 
 
 ```python
-# ===== CELL 1: imports, connection, contexts (takes ~2-3 min) =====
-import json, re, time, sqlite3
-import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
-
-DB  = "/Users/hannah/Desktop/parliament-speeches.sqlite"
-con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-
-def build_contexts(scan, con, before=400, after=250):
-    """One record per swear-word use: surrounding text plus the previous speech in the same debate."""
-    scan = scan.sort_values(["chamber", "gid", "offset"]).reset_index(drop=True)
-    need = set(zip(scan.chamber, scan.gid))
-    meta, subs = {}, {}
-    q = ("SELECT chamber, gid, speaker_name, party, speech_date, section_title, subsection_gid, hpos, body_text "
-         "FROM speeches")
-    for ch, gid, nm, pa, d, sec, sg, hp, txt in con.execute(q):
-        if (ch, gid) in need:
-            meta[(ch, gid)] = (nm, pa, d, sec, sg, hp, txt)
-        if sg is not None:
-            subs.setdefault((ch, sg), []).append((hp if hp is not None else -1, nm, pa, txt[-350:]))
-    out = []
-    for i, h in scan.iterrows():
-        nm, pa, d, sec, sg, hp, txt = meta[(h.chamber, h.gid)]
-        o, e = int(h.offset), int(h.offset) + len(h.token)
-        ctx = (("…" if o > before else "") + txt[max(0, o - before):o] + "[[" + txt[o:e] + "]]"
-               + txt[e:e + after] + ("…" if e + after < len(txt) else ""))
-        prev = None
-        if sg is not None and hp is not None:
-            c = [x for x in subs.get((h.chamber, sg), []) if x[0] < hp]
-            if c:
-                x = max(c, key=lambda t: t[0])
-                prev = {"speaker": x[1], "party": x[2], "end_of_speech": x[3]}
-        out.append({"id": i, "chamber": h.chamber, "gid": h.gid, "offset": o, "term": h.term,
-                    "speaker": nm, "party": pa, "date": d, "section": sec,
-                    "context": ctx, "previous_speech": prev})
-    return out
-
-recs = build_contexts(scan, con)
-print(len(recs))          # expect 4489
-```
-
-    4489
-
-
-
-```python
-# ===== CELL 2: prompt and classifier =====
-MODEL = "claude-haiku-5-5"     # small and fast; swap for a bigger model if the pilot looks weak
-
-SYSTEM = """You classify uses of swear words in Australian parliamentary speeches (Hansard).
-The swear word is marked [[like this]] in the context. Read the context and choose exactly ONE category:
-
-A = OWN USE, HURTFUL: the speaker uses the word in their own voice as an insult at a person or group
-    (e.g. "you bloody hypocrite", "those bastards in the government").
-B = OWN USE, NOT HURTFUL: the speaker uses it in their own voice for emphasis, frustration, humour or
-    affection, not as an insult. This includes mild expletive idioms such as "give a damn", "a damn sight",
-    "no bloody kidding", "you're a hard bugger" (e.g. "times are bloody tough", "it's a load of crap").
-C = QUOTING ABUSE AT THE SPEAKER: the speaker reports abuse directed at themselves, their party, family
-    or constituents (e.g. "he called me a bastard", an abusive message they received).
-D = QUOTING OTHERS, UNRELATED: the speaker quotes or reports someone else's words, not abuse aimed at
-    the speaker (e.g. "Mr Abbott said climate change is crap", a quoted letter or news article).
-E = NOT SWEARING: the word has a literal meaning or is part of a name, title or non-expletive idiom
-    (e.g. "damned if they do", "bloody-mindedly", "The Bloody Long Walk", "Old Bastards", "pissed" meaning
-    drunk, a mongrel dog, a blood prick).
-F = WITHDRAWAL OR POINT OF ORDER: the speaker (or the chair) is discussing, objecting to or asking for
-    the withdrawal of language used in the chamber.
-
-Notes: Use the previous speech only to judge whether abuse was aimed at the speaker. If it is a quote, choose
-C or D, not A or B. If you are unsure between two, pick the better fit and set confidence to "low".
-Reply with ONLY a JSON object: {"category": "A|B|C|D|E|F", "confidence": "high|low", "reason": "<12 words max>"}"""
-
-def make_prompt(r):
-    p = r["previous_speech"]
-    prev = f'{p["speaker"]} ({p["party"]}): …{p["end_of_speech"]}' if p else "(none)"
-    return (f'Speaker: {r["speaker"]} ({r["party"]}), {r["date"]}, {r["chamber"]}\n'
-            f'Debate: {r["section"]}\n\nPREVIOUS SPEECH (end):\n{prev}\n\nCONTEXT:\n{r["context"]}')
-
-def classify_one(client, r, retries=3):
-    err = ""
-    for attempt in range(retries):
-        try:
-            msg = client.messages.create(model=MODEL, max_tokens=120, temperature=0, system=SYSTEM,
-                                         messages=[{"role": "user", "content": make_prompt(r)}])
-            d = json.loads(re.search(r"\{.*\}", msg.content[0].text, re.S).group(0))
-            if d["category"] in list("ABCDEF"):
-                return {"id": r["id"], **d}
-        except Exception as e:
-            err = str(e); time.sleep(2 * (attempt + 1))
-    return {"id": r["id"], "category": None, "confidence": None, "reason": f"FAILED: {err}"[:100]}
-
-def classify_all(records, client, path, workers=8):
-    """Saves each result as it arrives and skips anything already done, so you can stop and re-run."""
-    try:
-        done = {d["id"] for d in map(json.loads, open(path)) if d["category"]}
-    except FileNotFoundError:
-        done = set()
-    todo = [r for r in records if r["id"] not in done]
-    with open(path, "a") as f, ThreadPoolExecutor(workers) as ex:
-        for res in ex.map(lambda r: classify_one(client, r), todo):
-            f.write(json.dumps(res) + "\n"); f.flush()
+parts = []
+for term, g in df.groupby("term"):
+    n = min(len(g), max(5, round(200 * len(g) / len(df))))
+    parts.append(g.sample(n, random_state=1))
+sample = pd.concat(parts).head(200)
+sample[["term", "speaker", "date", "context", "previous_speech"]].assign(my_label="").to_csv("to_label.csv")
 ```
 
 
 ```python
-def classify_one(client, r, retries=3):
-    err = ""
-    for attempt in range(retries):
-        try:
-            msg = client.messages.create(model=MODEL, max_tokens=120, system=SYSTEM,
-                                         messages=[{"role": "user", "content": make_prompt(r)}])
-            d = json.loads(re.search(r"\{.*\}", msg.content[0].text, re.S).group(0))
-            if d["category"] in list("ABCDEF"):
-                return {"id": r["id"], **d}
-        except Exception as e:
-            err = str(e); time.sleep(2 * (attempt + 1))
-    return {"id": r["id"], "category": None, "confidence": None, "reason": f"FAILED: {err}"[:100]}
+mine = pd.read_csv("/Users/hannah/Downloads/labelled.csv", index_col="id").my_label.str.strip().str.upper()
+chk  = df.loc[mine.index, ["category"]].assign(mine=mine)
+print("agreement:", round((chk.category == chk.mine).mean(), 3), "on", len(chk), "uses")
+pd.crosstab(chk.mine, chk.category)        
 ```
 
-
-```python
-# ===== CELL 3: client + 50-use pilot =====
-import anthropic
-client = anthropic.Anthropic()            # reads ANTHROPIC_API_KEY from the environment
-LABELS = "context_labels.jsonl"
-
-classify_all(recs[:50], client, LABELS)
-pd.read_json(LABELS, lines=True).category.value_counts(dropna=False)
-```
+    agreement: 0.385 on 200 uses
 
 
 
 
-    category
-    NaN    100
-    Name: count, dtype: int64
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>category</th>
+      <th>A</th>
+      <th>B</th>
+      <th>C</th>
+      <th>D</th>
+      <th>E</th>
+      <th>F</th>
+    </tr>
+    <tr>
+      <th>mine</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>A</th>
+      <td>9</td>
+      <td>60</td>
+      <td>0</td>
+      <td>3</td>
+      <td>1</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <th>B</th>
+      <td>3</td>
+      <td>35</td>
+      <td>0</td>
+      <td>4</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>C</th>
+      <td>0</td>
+      <td>4</td>
+      <td>0</td>
+      <td>12</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>D</th>
+      <td>4</td>
+      <td>4</td>
+      <td>2</td>
+      <td>20</td>
+      <td>1</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>E</th>
+      <td>0</td>
+      <td>19</td>
+      <td>0</td>
+      <td>1</td>
+      <td>12</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>F</th>
+      <td>0</td>
+      <td>0</td>
+      <td>0</td>
+      <td>1</td>
+      <td>0</td>
+      <td>1</td>
+    </tr>
+  </tbody>
+</table>
+</div>
 
 
 
 
 ```python
-bad = pd.read_json(LABELS, lines=True)
-bad.reason.value_counts().head()
+labels = pd.read_csv("/Users/hannah/Downloads/llm_labels.csv", dtype={"gid": str})
+
+scan = scan.drop(columns=[c for c in ["llm_label", "llm_confidence"] if c in scan.columns])
+scan = scan.merge(labels[["chamber", "gid", "offset", "llm_label", "llm_confidence"]],
+                  on=["chamber", "gid", "offset"], how="left")
+assert scan.llm_label.notna().all(), "some uses have no label"
+
+own = scan[scan.llm_label.isin(["A", "B"])]          
+words = speeches.groupby("speech_year").word_count.sum()
+
+trend = pd.DataFrame({
+    "all uses": scan.groupby("year").size().reindex(words.index, fill_value=0) / words * 1e6,
+    "own use":  own.groupby("year").size().reindex(words.index, fill_value=0) / words * 1e6,
+}).round(1)
+trend.T
 ```
 
 
 
 
-    reason
-    FAILED: Messages.create() got an unexpected keyword argument 'temperature'    50
-    Name: count, dtype: int64
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>speech_year</th>
+      <th>2006</th>
+      <th>2007</th>
+      <th>2008</th>
+      <th>2009</th>
+      <th>2010</th>
+      <th>2011</th>
+      <th>2012</th>
+      <th>2013</th>
+      <th>2014</th>
+      <th>2015</th>
+      <th>...</th>
+      <th>2017</th>
+      <th>2018</th>
+      <th>2019</th>
+      <th>2020</th>
+      <th>2021</th>
+      <th>2022</th>
+      <th>2023</th>
+      <th>2024</th>
+      <th>2025</th>
+      <th>2026</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>all uses</th>
+      <td>16.2</td>
+      <td>14.8</td>
+      <td>12.8</td>
+      <td>12.2</td>
+      <td>24.0</td>
+      <td>23.8</td>
+      <td>13.5</td>
+      <td>19.4</td>
+      <td>20.3</td>
+      <td>19.7</td>
+      <td>...</td>
+      <td>21.7</td>
+      <td>21.1</td>
+      <td>29.0</td>
+      <td>20.0</td>
+      <td>22.3</td>
+      <td>29.1</td>
+      <td>24.8</td>
+      <td>22.3</td>
+      <td>24.7</td>
+      <td>36.6</td>
+    </tr>
+    <tr>
+      <th>own use</th>
+      <td>7.2</td>
+      <td>7.4</td>
+      <td>5.7</td>
+      <td>5.5</td>
+      <td>5.5</td>
+      <td>6.7</td>
+      <td>6.2</td>
+      <td>8.7</td>
+      <td>8.9</td>
+      <td>11.0</td>
+      <td>...</td>
+      <td>13.5</td>
+      <td>16.0</td>
+      <td>22.4</td>
+      <td>15.6</td>
+      <td>16.0</td>
+      <td>20.8</td>
+      <td>19.5</td>
+      <td>16.6</td>
+      <td>19.9</td>
+      <td>29.2</td>
+    </tr>
+  </tbody>
+</table>
+<p>2 rows × 21 columns</p>
+</div>
 
 
 
 
 ```python
+labels = pd.read_csv("/Users/hannah/Downloads/llm_labels.csv", dtype={"gid": str})
+scan = scan.drop(columns=[c for c in ["llm_label", "llm_confidence"] if c in scan.columns])
+scan = scan.merge(labels[["chamber", "gid", "offset", "llm_label", "llm_confidence"]],
+                  on=["chamber", "gid", "offset"], how="left")
+assert scan.llm_label.notna().all(), "some uses have no label"
 
+RED, INK, MUTED, GRID = "#D7263D", "#0b0b0b", "#52514e", "#e4e3df"
+
+def style(ax):
+    for s in ["top", "right", "left"]:
+        ax.spines[s].set_visible(False)
+    ax.spines["bottom"].set_color(MUTED)
+    ax.grid(axis="y", color=GRID, lw=0.8); ax.set_axisbelow(True)
+    ax.tick_params(length=0, colors=MUTED)
+    ax.set_xticks(range(2006, 2027, 2))
+
+def draw_line(ax, s, color, lw, z=2, ls="-"):
+    """Solid line to 2025; 2026 (Jan-Aug only) dashed and hollow."""
+    ax.plot(s.index[:-1], s.iloc[:-1], color=color, lw=lw, ls=ls, zorder=z)
+    ax.plot(s.index[-2:], s.iloc[-2:], color=color, lw=lw, ls=(0, (3, 3)), zorder=z)
+    ax.scatter([s.index[-1]], [s.iloc[-1]], s=22, facecolor="white", edgecolor=color, linewidth=1.5, zorder=z + 1)
+
+def end_labels(ax, items, x, min_gap):
+    """items = [(y, text, colour, bold)]. Labels sit at the line ends, nudged apart, each joined to its line by a leader in the line's own colour."""
+    items = sorted(items, key=lambda t: t[0])
+    ys = [t[0] for t in items]
+    for i in range(1, len(ys)):
+        ys[i] = max(ys[i], ys[i - 1] + min_gap)
+    for (y0, text, color, bold), y in zip(items, ys):
+        ax.annotate(text, (x, y0), xytext=(x + 0.9, y), textcoords="data", va="center", fontsize=9, color=INK,
+                    fontweight="bold" if bold else "normal",
+                    arrowprops=dict(arrowstyle="-", color=color, lw=1.0, shrinkA=0, shrinkB=3,
+                                    connectionstyle="arc,angleA=180,angleB=0,armA=6,armB=0,rad=0"))
+
+words = speeches.groupby("speech_year").word_count.sum()
 ```
+
+
+```python
+# type of use
+INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
+USES = {
+    "Swearing for the sake of it (speaker's own use)": (["A", "B"], "#D7263D"),
+    "Quoting someone else":                            (["D"], "#4F6D8F"),
+    "Not swearing (literal / idiom)":                  (["E"], "#8C97A4"),
+    "Quoting abuse at the speaker":                    (["C"], "#8E6BB8"),
+    "Withdrawal / point of order":                     (["F"], "#B08A2E"),
+}
+PARTIAL_END = 2026 + 8 / 12
+
+by_use = pd.DataFrame({
+    label: scan[scan.llm_label.isin(letters)].groupby("year").size().reindex(words.index, fill_value=0) / words * 1e6
+    for label, (letters, colour) in USES.items()
+})
+
+x = by_use.index.to_numpy(dtype=float)
+x[-1] = PARTIAL_END
+
+fig, ax = plt.subplots(figsize=(10, 5.5))
+for side in ["top", "right", "left"]:
+    ax.spines[side].set_visible(False)
+ax.spines["bottom"].set_color(MUTED)
+ax.grid(axis="y", color=GRID, lw=0.8)
+ax.set_axisbelow(True)
+ax.tick_params(axis="y", length=0, colors=MUTED)
+ax.set_xticks(range(2006, 2028))
+ax.tick_params(axis="x", length=5, width=1, color=MUTED, labelcolor=MUTED, labelsize=8.5)
+
+for label, (letters, colour) in USES.items():
+    ax.plot(x, by_use[label], color=colour, lw=2, clip_on=False, label=label, zorder=5 if letters == ["A", "B"] else 2)
+
+ax.set_xlim(2006, 2027)
+ax.set_ylim(0, 32)
+ax.set_ylabel("Per million words spoken", color=MUTED)
+ax.legend(frameon=False, loc="lower left", bbox_to_anchor=(0, 1.02), ncol=3,
+          labelcolor=INK, borderaxespad=0, handlelength=2.2)
+ax.set_title("Occurrence of swearing in parliament, by instance of use", loc="left", color=INK, fontweight="bold", pad=54)
+ax.text(0, -0.13, "Note: 2026 data is until August only.", transform=ax.transAxes, color=MUTED, fontsize=8.5)
+plt.tight_layout(); plt.show()
+
+DW_OUT = OUT / "datawrapper"
+DW_OUT.mkdir(parents=True, exist_ok=True)
+by_use.round(2).rename_axis("Year").reset_index().to_csv(
+    DW_OUT / "swearing_in_parliament_by_use_per_million_words_2006-2026.csv", index=False)
+```
+
+
+    
+![png](output_29_0.png)
+    
+
+
+
+```python
+# own use by party 
+INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
+PARTIES = {
+    "Australian Labor Party":            ("Labor",       "#E13940", "-"),
+    "Liberal Party":                     ("Liberal",     "#1C4F9C", "-"),
+    "National Party":                    ("National",    "#F2C200", "-"),
+    "Australian Greens":                 ("Greens",      "#10C25B", "-"),
+    "Pauline Hanson's One Nation Party": ("One Nation",  "#F36C21", "-"),
+    "Independent":                       ("Independent", "#8A8A85", "-"),
+}
+MIN_WORDS = 300_000
+PARTIAL_END = 2026 + 8 / 12
+
+own = scan[scan.llm_label.isin(["A", "B"])]
+party_words = speeches.groupby(["party", "speech_year"]).word_count.sum()
+
+rates = {}
+for name, (label, colour, style) in PARTIES.items():
+    window_words = party_words.loc[name].reindex(words.index, fill_value=0).rolling(3).sum()
+    window_uses = own[own.party == name].groupby("year").size().reindex(words.index, fill_value=0).rolling(3).sum()
+    rates[label] = (window_uses / window_words * 1e6).where(window_words >= MIN_WORDS)
+
+rates = pd.DataFrame(rates).loc[2008:]
+x = rates.index.to_numpy(dtype=float)
+x[-1] = PARTIAL_END
+legend_order = sorted(rates.columns, key=lambda label: -rates[label].dropna().iloc[-1])
+
+fig, ax = plt.subplots(figsize=(10, 5.5))
+for side in ["top", "right", "left"]:
+    ax.spines[side].set_visible(False)
+ax.spines["bottom"].set_color(MUTED)
+ax.grid(axis="y", color=GRID, lw=0.8)
+ax.set_axisbelow(True)
+ax.tick_params(axis="y", length=0, colors=MUTED)
+ax.set_xticks(range(2008, 2028))
+ax.tick_params(axis="x", length=5, width=1, color=MUTED, labelcolor=MUTED, labelsize=8.5)
+
+lines = {}
+for name, (label, colour, style) in PARTIES.items():
+    lines[label], = ax.plot(x, rates[label], color=colour, lw=2, ls=style, marker="o", ms=4, mew=0,
+                            clip_on=False, label=label)
+
+ax.set_xlim(2008, 2027)
+ax.set_ylim(bottom=0)
+ax.set_ylabel("Per million words spoken by the party", color=MUTED)
+ax.legend([lines[label] for label in legend_order], legend_order, frameon=False, loc="lower left",
+          bbox_to_anchor=(0, 1.02), ncol=4, labelcolor=INK, borderaxespad=0, handlelength=2.2)
+ax.set_title("Own-use of swear words in parliament, by party (3 year rolling-rate)",
+             loc="left", color=INK, fontweight="bold", pad=54)
+ax.text(0, -0.19, "Note: Each point covers that year, and the two years before (rolling rate) for clarity.\n"
+        "Parties with <300k words spoken in Parliament in a window are excluded",
+        transform=ax.transAxes, color=MUTED, fontsize=8.5)
+plt.tight_layout(); plt.show()
+
+DW_OUT = OUT / "datawrapper"
+DW_OUT.mkdir(parents=True, exist_ok=True)
+rates.round(2).rename_axis("Year").reset_index().to_csv(
+    DW_OUT / "own_use_swearing_by_party_3_year_rolling_rate_per_million_words_2008-2026.csv", index=False)
+```
+
+
+    
+![png](output_30_0.png)
+    
+
